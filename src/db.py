@@ -16,13 +16,13 @@ import threading
 import time
 from contextlib import contextmanager
 
-import config
+import Setup
 
 _lock = threading.Lock()
 
 
 def _connect():
-    conn = sqlite3.connect(config.DB_PATH, check_same_thread=False)
+    conn = sqlite3.connect(Setup.DB_PATH, check_same_thread=False)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
@@ -75,7 +75,7 @@ def init_db():
             );
             """
         )
-        for t in config.DEFAULT_TAGS:
+        for t in Setup.TAGS:
             conn.execute("INSERT OR IGNORE INTO tags(name) VALUES (?)", (t,))
 
 

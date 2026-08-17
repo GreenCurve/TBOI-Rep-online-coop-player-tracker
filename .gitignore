@@ -1,3 +1,4 @@
 /src/__pycache__
 /data
 src/isaac_players.db
+src/config.json

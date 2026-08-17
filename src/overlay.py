@@ -23,7 +23,7 @@ import win32api
 
 import keyboard  # global hotkey hook, works while another app is focused
 
-import config
+import Setup
 import db
 
 
@@ -153,7 +153,7 @@ class Overlay(QtWidgets.QWidget):
         self.scroll.setWidget(self.list_widget)
         inner.addWidget(self.scroll)
 
-        hint = QtWidgets.QLabel(f"Toggle with {config.HOTKEY.upper()} · drag titlebar-free window with Alt+drag")
+        hint = QtWidgets.QLabel(f"Toggle with {Setup.HOTKEY.upper()} · drag titlebar-free window with Alt+drag")
         hint.setStyleSheet("color: #888; font-size: 10px;")
         inner.addWidget(hint)
 
@@ -220,7 +220,7 @@ def install_hotkey(overlay: Overlay, app: QtWidgets.QApplication):
     bridge = _HotkeyBridge()
     bridge.fired.connect(lambda: overlay.setVisible(not overlay.isVisible()))
 
-    keyboard.add_hotkey(config.HOTKEY, bridge.fired.emit)
+    keyboard.add_hotkey(Setup.HOTKEY, bridge.fired.emit)
 
     # keep a reference alive on the app object so it isn't garbage collected
     app._hotkey_bridge = bridge
@@ -243,7 +243,7 @@ def main():
     quit_action = tray_menu.addAction("Quit")
     quit_action.triggered.connect(app.quit)
     tray.setContextMenu(tray_menu)
-    tray.setToolTip(f"Isaac Player Tracker (toggle: {config.HOTKEY.upper()})")
+    tray.setToolTip(f"Isaac Player Tracker (toggle: {Setup.HOTKEY.upper()})")
     tray.show()
 
     sys.exit(app.exec())

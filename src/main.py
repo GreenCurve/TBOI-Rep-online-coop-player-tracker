@@ -13,7 +13,7 @@ Usage:
 import argparse
 import threading
 
-import config
+import Setup
 import db
 import log_watcher
 import overlay
@@ -21,7 +21,7 @@ import overlay
 
 def main():
     parser = argparse.ArgumentParser(description="Isaac Player Tracker")
-    parser.add_argument("--log-path", default=config.LOG_PATH)
+    parser.add_argument("--log-path", default=Setup.LOG_PATH)
     parser.add_argument("--from-start", action="store_true")
     args = parser.parse_args()
 

@@ -27,7 +27,7 @@ import time
 import argparse
 import logging
 
-import config
+import Setup
 import db
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [watcher] %(message)s")
@@ -69,7 +69,7 @@ import time
 import argparse
 import logging
 
-import config
+import Setup
 import db
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [watcher] %(message)s")
@@ -193,7 +193,7 @@ def follow(path: str, from_start: bool = False):
 
 
 def run(path: str = None, from_start: bool = False):
-    path = path or config.LOG_PATH
+    path = path or Setup.LOG_PATH
     db.init_db()
     watcher = Watcher()
     log.info("Watching: %s", path)
@@ -206,7 +206,7 @@ def run(path: str = None, from_start: bool = False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Isaac lobby log watcher")
-    parser.add_argument("--log-path", default=config.LOG_PATH)
+    parser.add_argument("--log-path", default=Setup.LOG_PATH)
     parser.add_argument(
         "--from-start",
         action="store_true",
