@@ -116,6 +116,17 @@ def all_players():
         ).fetchall()
 
 
+def get_recent_players(limit: int = 10):
+    """Most recently-seen players across all logs (not just the current
+    lobby), newest first. Used by the 'Recent Players' overlay panel."""
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT steam_id, username, first_seen, last_seen "
+            "FROM players ORDER BY last_seen DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+
+
 # ---- tags -------------------------------------------------------------------
 
 def list_tags():

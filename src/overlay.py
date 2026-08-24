@@ -8,8 +8,11 @@ the foreground window - so the game keeps thinking it's focused and never
 pauses or minimizes. This is the same trick overlays like RTSS/MSI
 Afterburner or old-school Discord overlays use.
 
-Toggle it with a global hotkey (default F9, see config.py) that works even
-while the game has focus.
+Toggle the lobby panel with a global hotkey (default F9, see config.py)
+that works even while the game has focus. The "Recent Players" panel is a
+separate window you can toggle from the button on the lobby panel or from
+the tray menu; it shows the last 10 players seen across all sessions, not
+just people currently in your lobby.
 """
 
 import sys
@@ -43,8 +46,40 @@ def make_noactivate(hwnd: int):
     )
 
 
+class _NoActivateDraggableWindow(QtWidgets.QWidget):
+    """Shared behavior for the frameless, click-through-safe overlay
+    windows: draggable by clicking anywhere on the window, and never steals
+    focus from the game once shown."""
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowFlags(
+            QtCore.Qt.WindowType.FramelessWindowHint
+            | QtCore.Qt.WindowType.WindowStaysOnTopHint
+            | QtCore.Qt.WindowType.Tool
+        )
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
+        self._drag_pos = None
+
+    def mousePressEvent(self, event):
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+
+    def mouseMoveEvent(self, event):
+        if self._drag_pos is not None and event.buttons() & QtCore.Qt.MouseButton.LeftButton:
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_pos = None
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        hwnd = int(self.winId())
+        make_noactivate(hwnd)
+
+
 class PlayerRow(QtWidgets.QFrame):
-    def __init__(self, steam_id, username, parent=None):
+    def __init__(self, steam_id, username, parent=None, subtitle=None):
         super().__init__(parent)
         self.steam_id = steam_id
         self.setStyleSheet(
@@ -65,11 +100,28 @@ class PlayerRow(QtWidgets.QFrame):
         top.addWidget(add_btn)
         layout.addLayout(top)
 
+        self.subtitle_lbl = None
+        if subtitle:
+            self.subtitle_lbl = QtWidgets.QLabel(subtitle)
+            self.subtitle_lbl.setStyleSheet("color: #999; font-size: 10px;")
+            layout.addWidget(self.subtitle_lbl)
+
         self.tags_layout = QtWidgets.QHBoxLayout()
         self.tags_layout.setSpacing(4)
         layout.addLayout(self.tags_layout)
 
         self.refresh_tags()
+
+    def update_subtitle(self, subtitle):
+        if subtitle is None:
+            return
+        if self.subtitle_lbl is None:
+            self.subtitle_lbl = QtWidgets.QLabel(subtitle)
+            self.subtitle_lbl.setStyleSheet("color: #999; font-size: 10px;")
+            # insert right after the top row (index 0), before the tags row
+            self.layout().insertWidget(1, self.subtitle_lbl)
+        else:
+            self.subtitle_lbl.setText(subtitle)
 
     def refresh_tags(self):
         while self.tags_layout.count():
@@ -118,16 +170,19 @@ class PlayerRow(QtWidgets.QFrame):
             self.refresh_tags()
 
 
-class Overlay(QtWidgets.QWidget):
+class Overlay(_NoActivateDraggableWindow):
+    """Single docked window: the current-lobby list always shown up top,
+    plus a collapsible 'Recent Players' section below it that expands the
+    same window (so both sections move together when you drag it) rather
+    than opening a second floating window."""
+
+    RECENT_LIMIT = 10
+    BASE_HEIGHT = 420
+    RECENT_SECTION_HEIGHT = 260
+
     def __init__(self):
         super().__init__()
-        self.setWindowFlags(
-            QtCore.Qt.WindowType.FramelessWindowHint
-            | QtCore.Qt.WindowType.WindowStaysOnTopHint
-            | QtCore.Qt.WindowType.Tool
-        )
-        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.resize(360, 420)
+        self.resize(360, self.BASE_HEIGHT)
         self.move(60, 60)
 
         outer = QtWidgets.QVBoxLayout(self)
@@ -140,9 +195,23 @@ class Overlay(QtWidgets.QWidget):
         outer.addWidget(container)
         inner = QtWidgets.QVBoxLayout(container)
 
+        # -- lobby section --------------------------------------------------
+        title_row = QtWidgets.QHBoxLayout()
         title = QtWidgets.QLabel("Current Lobby")
         title.setStyleSheet("color: white; font-size: 16px; font-weight: bold;")
-        inner.addWidget(title)
+        title_row.addWidget(title)
+        title_row.addStretch()
+
+        self.recent_btn = QtWidgets.QToolButton()
+        self.recent_btn.setText("Recent Players")
+        self.recent_btn.setCheckable(True)
+        self.recent_btn.setStyleSheet(
+            "QToolButton { color: white; background: rgba(60,60,60,180); border-radius: 6px; padding: 3px 8px; }"
+            "QToolButton:checked { background: #3a6ea5; }"
+        )
+        self.recent_btn.clicked.connect(self.toggle_recent_section)
+        title_row.addWidget(self.recent_btn)
+        inner.addLayout(title_row)
 
         self.scroll = QtWidgets.QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -153,31 +222,58 @@ class Overlay(QtWidgets.QWidget):
         self.scroll.setWidget(self.list_widget)
         inner.addWidget(self.scroll)
 
-        hint = QtWidgets.QLabel(f"Toggle with {Setup.HOTKEY.upper()} · drag titlebar-free window with Alt+drag")
+        hint = QtWidgets.QLabel(f"Toggle with {Setup.HOTKEY.upper()} · drag anywhere to move")
         hint.setStyleSheet("color: #888; font-size: 10px;")
         inner.addWidget(hint)
 
         self._rows = {}
-        self._drag_pos = None
+
+        # -- recent-players section (docked below, collapsible) -------------
+        self.recent_section = QtWidgets.QWidget()
+        recent_layout = QtWidgets.QVBoxLayout(self.recent_section)
+        recent_layout.setContentsMargins(0, 8, 0, 0)
+
+        divider = QtWidgets.QFrame()
+        divider.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+        divider.setStyleSheet("color: rgba(255,255,255,40);")
+        recent_layout.addWidget(divider)
+
+        recent_title = QtWidgets.QLabel(f"Recent Players (last {self.RECENT_LIMIT})")
+        recent_title.setStyleSheet("color: white; font-size: 14px; font-weight: bold; margin-top: 4px;")
+        recent_layout.addWidget(recent_title)
+
+        self.recent_scroll = QtWidgets.QScrollArea()
+        self.recent_scroll.setWidgetResizable(True)
+        self.recent_scroll.setStyleSheet("background: transparent; border: none;")
+        self.recent_list_widget = QtWidgets.QWidget()
+        self.recent_list_layout = QtWidgets.QVBoxLayout(self.recent_list_widget)
+        self.recent_list_layout.addStretch()
+        self.recent_scroll.setWidget(self.recent_list_widget)
+        recent_layout.addWidget(self.recent_scroll)
+
+        inner.addWidget(self.recent_section)
+        self.recent_section.setVisible(False)
+        self._recent_rows = {}
 
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self.refresh)
         self.timer.start(1000)
 
-    # -- allow dragging the borderless window around -----------------------
-    def mousePressEvent(self, event):
-        if event.button() == QtCore.Qt.MouseButton.LeftButton:
-            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-
-    def mouseMoveEvent(self, event):
-        if self._drag_pos is not None and event.buttons() & QtCore.Qt.MouseButton.LeftButton:
-            self.move(event.globalPosition().toPoint() - self._drag_pos)
-
-    def mouseReleaseEvent(self, event):
-        self._drag_pos = None
+    def toggle_recent_section(self):
+        visible = not self.recent_section.isVisible()
+        self.recent_section.setVisible(visible)
+        self.recent_btn.setChecked(visible)
+        self.resize(self.width(), self.BASE_HEIGHT + (self.RECENT_SECTION_HEIGHT if visible else 0))
+        if visible:
+            self.refresh_recent()
 
     # -- data refresh --------------------------------------------------------
     def refresh(self):
+        self.refresh_lobby()
+        if self.recent_section.isVisible():
+            self.refresh_recent()
+
+    def refresh_lobby(self):
         members = db.get_current_lobby_members()
         local_id = db.get_state("local_steam_id")
         current_ids = set()
@@ -200,11 +296,27 @@ class Overlay(QtWidgets.QWidget):
         if not members:
             pass  # (left empty; could show "no one else in your lobby yet")
 
-    # -- apply the win32 no-activate style once the native handle exists ----
-    def showEvent(self, event):
-        super().showEvent(event)
-        hwnd = int(self.winId())
-        make_noactivate(hwnd)
+    def refresh_recent(self):
+        recent = db.get_recent_players(self.RECENT_LIMIT)
+        current_ids = {r[0] for r in recent}
+
+        for steam_id in list(self._recent_rows.keys()):
+            if steam_id not in current_ids:
+                self._recent_rows[steam_id].deleteLater()
+                del self._recent_rows[steam_id]
+
+        for idx, (steam_id, username, first_seen, last_seen) in enumerate(recent):
+            subtitle = f"last seen {last_seen}"
+            if steam_id not in self._recent_rows:
+                row = PlayerRow(steam_id, username, subtitle=subtitle)
+                self._recent_rows[steam_id] = row
+            else:
+                row = self._recent_rows[steam_id]
+                row.update_subtitle(subtitle)
+                row.refresh_tags()
+            # keep list ordered newest-first without destroying/recreating rows
+            self.recent_list_layout.removeWidget(row)
+            self.recent_list_layout.insertWidget(idx, row)
 
 
 class _HotkeyBridge(QtCore.QObject):
@@ -240,6 +352,8 @@ def main():
     tray_menu = QtWidgets.QMenu()
     toggle_action = tray_menu.addAction("Show/Hide overlay")
     toggle_action.triggered.connect(lambda: overlay.setVisible(not overlay.isVisible()))
+    toggle_recent_action = tray_menu.addAction("Show/Hide recent players")
+    toggle_recent_action.triggered.connect(overlay.toggle_recent_section)
     quit_action = tray_menu.addAction("Quit")
     quit_action.triggered.connect(app.quit)
     tray.setContextMenu(tray_menu)
